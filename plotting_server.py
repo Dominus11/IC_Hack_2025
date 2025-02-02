@@ -63,7 +63,9 @@ def plot_json():
 @app.route('/data', methods=['POST'])
 def add_data():
     data = request.json
-    scatter_renderer.data_source.stream(dict(x=[data['x']], y=[data['y']]))
+    x_values = data['xs']
+    y_values = data['ys']
+    scatter_renderer.data_source.stream(dict(x=x_values, y=y_values))
     return jsonify(data), 200
 
 if __name__ == '__main__':

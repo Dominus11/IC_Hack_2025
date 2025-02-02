@@ -16,10 +16,12 @@ async def send_data(websocket):
 async def receive_data(websocket):
     async for message in websocket:
         print(f"Received: {message}")
-        x, y = map(float, message.split(" "))
+        lst = map(lambda s: s.split(), message.split(';'))
+        xs = [x for x, _ in lst]
+        ys = [y for _, y in lst]
         async with aiohttp.ClientSession() as session:
             url = "http://localhost:3000/data"  # Replace with your actual endpoint
-            data = {"x": x, "y": y}
+            data = {"xs": xs, "ys": ys}
             async with session.post(url, json=data) as response:
                 if response.status == 200:
                     print("Data posted successfully")
