@@ -1,5 +1,8 @@
 import asyncio
 import websockets
+import aiohttp
+
+URL = "localhost:3000"
 
 # WebSocket server function
 async def send_data(websocket):
@@ -13,6 +16,15 @@ async def send_data(websocket):
 async def receive_data(websocket):
     async for message in websocket:
         print(f"Received: {message}")
+        x, y = map(float, message.split(" "))
+        async with aiohttp.ClientSession() as session:
+            url = "http://localhost:3000/data"  # Replace with your actual endpoint
+            data = {"x": x, "y": y}
+            async with session.post(url, json=data) as response:
+                if response.status == 200:
+                    print("Data posted successfully")
+                else:
+                    print(f"Failed to post data: {response.status}")
 
 # Start WebSocket server
 async def start_server():
