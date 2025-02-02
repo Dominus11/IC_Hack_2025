@@ -13,8 +13,12 @@ const int MOTOR_3_PIN_2 = 33; // RIGHT MOTOR
 const int SDA_PIN = 21; // 
 const int SCL_PIN = 22; //
 
+const int BUZZER = 15;
+int buzz = 0;
+
 #include "FastIMU.h"
 #include <Wire.h>
+#include <MadgwickAHRS.h> // Include the Madgwick filter library
 
 #include <WiFi.h>
 #include <ArduinoWebsockets.h>
@@ -35,19 +39,23 @@ AccelData accelData;    //Sensor data
 GyroData gyroData;
 MagData magData;
 
+// Initialize Madgwick filter
+Madgwick filter;
+const float sensorRate = 104.00; // IMU sample rate in Hz
+
 // Currently supported IMUS: MPU9255 MPU9250 MPU6886 MPU6500 MPU6050 ICM20689 ICM20690 BMI055 BMX055 BMI160 LSM6DS3 LSM6DSL QMI8658
 
 #define MAX_DISTANCE 400
 #define MIN_DISTANCE 10
 
 // SLAM variables
-#define MAX_LANDMARKS 500
+#define MAX_LANDMARKS 50
 float landmarks[MAX_LANDMARKS][2]; // Array to store landmark positions
 int num_landmarks = 0;
 int overflow = false;
 
 float dists[3];
-int lastResetTime = 0;
+unsigned long lastResetTime = 0;
 
 // Robot position and movement
 float robot_x = 0;
@@ -80,6 +88,7 @@ void setupWifi(){
     client.onMessage([](WebsocketsMessage message) {
         Serial.print("Received: ");
         Serial.println(message.data());
+        buzz = message.data().toInt() * 100;
     });
 
     client.onEvent([](WebsocketsEvent event, String data) {
@@ -104,12 +113,16 @@ void setupWifi(){
 }
 
 float mapVibration(float distance){
-  return map(distance, 10, 400, 0, 1);
+  if (distance < 5 || distance > 400) return 0;
+  return 1/map(distance, 5, 400, 1, 1000);
 }
 
-void updateVibration(int now){
+#define CYCLE 100
 
-  if (now - lastResetTime > 500){
+bool direction = false;
+void updateVibration(unsigned long now){
+
+  if (now - lastResetTime > CYCLE){
     digitalWrite(MOTOR_1_PIN_1, LOW);
     digitalWrite(MOTOR_1_PIN_2, LOW);
 
@@ -122,33 +135,21 @@ void updateVibration(int now){
     lastResetTime = now;
   }
 
-  if (now - lastResetTime > 500 * mapVibration(dists[0])) {
-    digitalWrite(MOTOR_1_PIN_2, HIGH);
-    digitalWrite(MOTOR_1_PIN_1, LOW);
+  if (now - lastResetTime > CYCLE * mapVibration(dists[0])) {
+    digitalWrite(MOTOR_1_PIN_2, direction ? HIGH : LOW);
+    digitalWrite(MOTOR_1_PIN_1, direction ? LOW : HIGH);
   }
-  if (now - lastResetTime > 500 * mapVibration(dists[1])) {
-    digitalWrite(MOTOR_2_PIN_2, HIGH);
-    digitalWrite(MOTOR_2_PIN_1, LOW);
+  if (now - lastResetTime > CYCLE * mapVibration(dists[1])) {
+    digitalWrite(MOTOR_2_PIN_2, direction ? HIGH : LOW);
+    digitalWrite(MOTOR_2_PIN_1, direction ? LOW : HIGH);
   }
-  if (now - lastResetTime > 500 * mapVibration(dists[2])) {
-    digitalWrite(MOTOR_3_PIN_2, HIGH);
-    digitalWrite(MOTOR_3_PIN_1, LOW);
+  if (now - lastResetTime > CYCLE * mapVibration(dists[2])) {
+    digitalWrite(MOTOR_3_PIN_2, direction ? HIGH : LOW);
+    digitalWrite(MOTOR_3_PIN_1, direction ? LOW : HIGH);
   }
 
-}
+  direction = !direction;
 
-void vibrate(int delayAmt, int PIN_1, int PIN_2){
-  if(delayAmt < 0) return;
-
-  digitalWrite(PIN_2, HIGH);
-  digitalWrite(PIN_1, LOW);
-
-  delay(delayAmt);
-
-  digitalWrite(PIN_1, HIGH);
-  digitalWrite(PIN_2, LOW);
-
-  delay(delayAmt);
 }
 
 float getDistance(int TRIG_PIN, int ECHO_PIN){
@@ -194,6 +195,8 @@ void setup() {
   pinMode(MOTOR_3_PIN_1, OUTPUT);
   pinMode(MOTOR_3_PIN_2, OUTPUT);
 
+  pinMode(BUZZER, OUTPUT);
+
   int err = IMU.init(calib, IMU_ADDRESS);
   if (err != 0) {
     Serial.print("Error initializing IMU: ");
@@ -222,6 +225,8 @@ void setup() {
   delay(1000);
   IMU.init(calib, IMU_ADDRESS);
 
+  filter.begin(sensorRate);
+
   if (err != 0) {
     Serial.print("Error Setting range: ");
     Serial.println(err);
@@ -249,6 +254,10 @@ float prev_time = 0;
 
 String buffer = "";
 
+int centerDistance = 0;
+int leftDistance = 0;
+int rightDistance = 0;
+
 void loop() {
 
   float current_time = millis() / 1000.0;
@@ -271,17 +280,9 @@ void loop() {
   if (suppress) counter = 1;
   counter = (counter+1)%10;
 
-  int centerDistance = getDistance(TRIG_PIN_1, ECHO_PIN_1);
-  int leftDistance = getDistance(TRIG_PIN_2, ECHO_PIN_2);
-  int rightDistance = getDistance(TRIG_PIN_3, ECHO_PIN_3);
-
-  int centerFreq = mapVibration(centerDistance);
-  int leftFreq = mapVibration(leftDistance);
-  int rightFreq = mapVibration(rightDistance);
-
-  vibrate(leftFreq, MOTOR_1_PIN_1, MOTOR_1_PIN_2);
-  vibrate(centerFreq, MOTOR_2_PIN_1, MOTOR_2_PIN_2);
-  vibrate(rightFreq, MOTOR_3_PIN_1, MOTOR_3_PIN_2);
+  centerDistance = getDistance(TRIG_PIN_1, ECHO_PIN_1);
+  leftDistance = getDistance(TRIG_PIN_2, ECHO_PIN_2);
+  rightDistance = getDistance(TRIG_PIN_3, ECHO_PIN_3);
 
   // Read gyroscope data
   imnotevenfuckingpaidforthis();
@@ -298,8 +299,11 @@ void loop() {
   
   // SLAM process
   updateSLAM(centerDistance, 0);
-  updateSLAM(leftDistance, -PI/2);
-  updateSLAM(rightDistance, PI/2);
+  updateSLAM(leftDistance, -PI/6);
+  updateSLAM(rightDistance, PI/6);
+
+  updateDists();
+  updateVibration(millis());
   
   // Print current state
   if (counter==0) printState();
@@ -307,6 +311,7 @@ void loop() {
   if (client.available()) {
     client.poll();  // Keep connection alive and handle incoming messages
   }
+  tone(BUZZER, buzz);
 
   // Optional: Send a message to the server periodically
   unsigned long lastSendTime = 0;
@@ -383,8 +388,8 @@ void updateRobotPosition(float accel_x, float accel_y, float delta_yaw, float de
 void updateSLAM(unsigned int distance, int theta) {
   if (distance > MIN_DISTANCE && distance < MAX_DISTANCE) {
     // Convert polar coordinates to Cartesian, relative to robot
-    float relative_x = distance * cos(robot_yaw+theta);
-    float relative_y = distance * sin(robot_yaw+theta);
+    float relative_x = distance * cos(robot_yaw+theta) / 100;
+    float relative_y = distance * sin(robot_yaw+theta) / 100;
     
     // Convert to global coordinates
     float global_x = robot_x + relative_x;
@@ -400,8 +405,8 @@ void updateSLAM(unsigned int distance, int theta) {
       if (distance_to_landmark < 1) { // Threshold for considering it the same landmark
         is_new_landmark = false;
         // Update landmark position (simple average)
-        landmarks[i][0] = (landmarks[i][0] + global_x) / 2;
-        landmarks[i][1] = (landmarks[i][1] + global_y) / 2;
+        landmarks[i][0] = (landmarks[i][0] + 100 * global_x) / 2;
+        landmarks[i][1] = (landmarks[i][1] + 100 * global_y) / 2;
         break;
       }
     }
@@ -412,7 +417,6 @@ void updateSLAM(unsigned int distance, int theta) {
       landmarks[num_landmarks][1] = global_y;
       num_landmarks = (num_landmarks+1)%MAX_LANDMARKS;
       if (num_landmarks == 0) overflow = true;
-      buffer += "("+String(global_x)+","+String(global_y)+"),";
     }
   }
 }
@@ -429,9 +433,11 @@ void printState() {
   Serial.println(overflow ? MAX_LANDMARKS : num_landmarks);
   
   Serial.print("Landmarks: \n[");
+  buffer = String(100*robot_x) + " " + String(100*robot_y) + "; ";
   for (int i = overflow ? (num_landmarks+1)%MAX_LANDMARKS : 0; i != num_landmarks; i = (i+1)%MAX_LANDMARKS) {
     // Serial.print("Landmark ");
     // Serial.print(i);
+    buffer += String(landmarks[i][0]) + " " + String(landmarks[i][1]) + "; ";
     Serial.print("(");
     Serial.print(landmarks[i][0]);
     Serial.print(", ");
@@ -447,16 +453,23 @@ void imnotevenfuckingpaidforthis() {
   IMU.getAccel(&accelData);
   IMU.getGyro(&gyroData);
   
-  AX = accelData.accelX * 9.8-0.9; 
-  AY = accelData.accelY * 9.8; 
-  AZ = accelData.accelZ * 9.8;
-
-  // AX -= sqrt(max(9.8*9.8-AZ*AZ, 0)) * cos(robot_roll);
+  float ax = accelData.accelX;
+  float ay = accelData.accelY;
+  float az = accelData.accelZ;
 
   // Read gyroscope data
   GX = gyroData.gyroX * PI/180; 
   GY = gyroData.gyroY * PI/180; 
   GZ = gyroData.gyroZ * PI/180; 
+
+  filter.updateIMU(GX, GY, GZ, ax, ay, az);
+  float roll = filter.getRoll();
+  float pitch = filter.getPitch();
+  float yaw = filter.getYaw();
+
+  AX = ax - sin(pitch) * 9.81;
+  AY = ay - sin(roll) * cos(pitch) * 9.81;
+  AZ = az - cos(roll) * cos(pitch) * 9.81;
 
   if(counter!=0) return;
 
@@ -478,25 +491,32 @@ void imnotevenfuckingpaidforthis() {
   Serial.print("Gyro (rad/s): ");
   Serial.print(GX); Serial.print(", ");
   Serial.print(GY); Serial.print(", ");
-  Serial.println(GZ);
+  Serial.println(GZ); Serial.print(" | ");
+
+  Serial.print("Dists (m): ");
+  Serial.print(dists[0]); Serial.print(", ");
+  Serial.print(dists[1]); Serial.print(", ");
+  Serial.println(dists[2]);
 }
 
-
 void updateDists(){
-  for(int j = 0; j < 3; j++){
-    dists[j] = -1;
-    float theta = (j-1)*PI/2;
-    float tx = cos(theta);
-    float ty = sin(theta);
-    for (int i = 0; i < num_landmarks; i++){
-      float x = landmarks[i][0] - robot_x;
-      float y = landmarks[i][1] - robot_y;
-      float d = sqrt(x*x+y*y);
-      if (abs((tx*x+ty*y) / (x*x+y*y+0.001)) <= cos(PI/8) && (dists[j]>d || dists[j]<0)) {
-        dists[j] = d;
-      }
-    }
-  }
+  // for(int j = 0; j < 3; j++){
+  //   dists[j] = -1;
+  //   float theta = (j-1)*PI/2;
+  //   float tx = cos(theta);
+  //   float ty = sin(theta);
+  //   for (int i = 0; i < num_landmarks; i++){
+  //     float x = landmarks[i][0] - robot_x;
+  //     float y = landmarks[i][1] - robot_y;
+  //     float d = sqrt(x*x+y*y);
+  //     if (abs((tx*x+ty*y) / (x*x+y*y+0.001)) <= cos(PI/8) && (dists[j]>d || dists[j]<0)) {
+  //       dists[j] = d;
+  //     }
+  //   }
+  // }
+  dists[0] = leftDistance;
+  dists[1] = centerDistance;
+  dists[2] = rightDistance;
 }
 
 
