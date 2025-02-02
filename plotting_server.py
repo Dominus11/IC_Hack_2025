@@ -68,6 +68,8 @@ def add_data():
     for i in range(1, len(x_values)):
         x_values[i] -= x_values[0]
         y_values[i] -= y_values[0]
+    x_values[0] = 0
+    y_values[0] = 0
     scatter_renderer.data_source.data = dict(x=x_values, y=y_values)
     return jsonify(data), 200
 
