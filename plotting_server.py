@@ -7,7 +7,7 @@ import json
 app = Flask(__name__)
 
 plot = figure(title="Real-time Data Plot")
-scatter_renderer = plot.scatter(x=[], y=[], name="scatter_plot")
+scatter_renderer = plot.scatter(x=[6], y=[4], name="scatter_plot")
 
 @app.route('/', methods=['GET'])
 def index():
@@ -35,12 +35,12 @@ def index():
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({x: parseFloat(x), y: parseFloat(y)}),
+                        body: JSON.stringify({xs: [parseFloat(x)], ys: [parseFloat(y)]}),
                     })
                     .then(response => response.json())
                     .then(data => {
-                        source.data.x.push(data.x);
-                        source.data.y.push(data.y);
+                        source.data.x = source.data.x.concat(data.xs);
+                        source.data.y = source.data.y.concat(data.ys);
                         source.change.emit();
                     });
                 }
@@ -63,9 +63,12 @@ def plot_json():
 @app.route('/data', methods=['POST'])
 def add_data():
     data = request.json
-    x_values = data['xs']
-    y_values = data['ys']
-    scatter_renderer.data_source.stream(dict(x=x_values, y=y_values))
+    x_values = list(map(float, data['xs']))
+    y_values = list(map(float, data['ys']))
+    for i in range(1, len(x_values)):
+        x_values[i] -= x_values[0]
+        y_values[i] -= y_values[0]
+    scatter_renderer.data_source.data = dict(x=x_values, y=y_values)
     return jsonify(data), 200
 
 if __name__ == '__main__':
