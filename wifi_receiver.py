@@ -30,8 +30,8 @@ async def receive_data(websocket):
 
 # Start WebSocket server
 async def start_server():
-    async with websockets.serve(handler, "192.168.137.64", 8765):
-        print("WebSocket server started on ws://192.168.137.64:8765")
+    async with websockets.serve(handler, "192.168.137.38", 8765):
+        print("WebSocket server started on ws://192.168.137.38:8765")
         await asyncio.Future()  # Keeps the server running
 
 # Handler to manage both sending and receiving
