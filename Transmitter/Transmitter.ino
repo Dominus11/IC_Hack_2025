@@ -13,15 +13,19 @@ const int MOTOR_3_PIN_2 = 33; // RIGHT MOTOR
 const int SDA_PIN = 21; // 
 const int SCL_PIN = 22; //
 
+#include "FastIMU.h"
 #include <Wire.h>
 
-// MPU9250 I2C address
-#define MPU9250_ADDRESS 0x68
+#define IMU_ADDRESS 0x68    //Change to the address of the IMU
+#define PERFORM_CALIBRATION //Comment to disable startup calibration
+MPU6500 IMU;               //Change to the name of any supported IMU! 
 
-// Register addresses
-#define ACCEL_XOUT_H    0x3B
-#define GYRO_XOUT_H     0x43
-#define MAG_XOUT_L      0x03    // Magnetometer data starts at this register
+calData calib = { 0 };  //Calibration data
+AccelData accelData;    //Sensor data
+GyroData gyroData;
+MagData magData;
+
+// Currently supported IMUS: MPU9255 MPU9250 MPU6886 MPU6500 MPU6050 ICM20689 ICM20690 BMI055 BMX055 BMI160 LSM6DS3 LSM6DSL QMI8658
 
 #define MAX_DISTANCE 400
 #define MIN_DISTANCE 10
@@ -30,6 +34,9 @@ const int SCL_PIN = 22; //
 #define MAX_LANDMARKS 100
 float landmarks[MAX_LANDMARKS][2]; // Array to store landmark positions
 int num_landmarks = 0;
+
+const float COS18 = 0.9510565;
+float dists[3];
 
 // Robot position and movement
 float robot_x = 0;
@@ -62,12 +69,12 @@ void vibrate(int delayAmt, int PIN_1, int PIN_2){
 
     // int centerFreq = map(centerDistance, 10, 400, 15, 50);
 
-    delay(delayAmt);
+    // delay(delayAmt);
 
     digitalWrite(PIN_1, HIGH);
     digitalWrite(PIN_2, LOW);
 
-    delay(delayAmt);
+    // delay(delayAmt);
 }
 
 float getDistance(int TRIG_PIN, int ECHO_PIN){
@@ -80,7 +87,7 @@ float getDistance(int TRIG_PIN, int ECHO_PIN){
   digitalWrite(TRIG_PIN, LOW);
 
   // Measure the duration of the echo pulse
-  long duration = pulseIn(ECHO_PIN, HIGH);
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
 
   // Calculate distance in centimeters
   float distance = duration * 0.034 / 2;
@@ -93,6 +100,10 @@ float getDistance(int TRIG_PIN, int ECHO_PIN){
 }
 
 void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Wire.begin();
+  Wire.setClock(400000); //400khz clock
 
   pinMode(TRIG_PIN_1, OUTPUT);  // Set TRIG as output
   pinMode(ECHO_PIN_1, INPUT);   // Set ECHO as input
@@ -107,10 +118,41 @@ void setup() {
   pinMode(MOTOR_3_PIN_1, OUTPUT);
   pinMode(MOTOR_3_PIN_2, OUTPUT);
 
-  Serial.begin(9600);       // Initialize Serial Monitor
-  Serial.println("HC-SR04 Ultrasonic Sensor Initialized");
+  int err = IMU.init(calib, IMU_ADDRESS);
+  if (err != 0) {
+    Serial.print("Error initializing IMU: ");
+    Serial.println(err);
+    while (true) {
+      ;
+    }
+  }
 
-  setupWire();
+  Serial.println("Keep IMU level.");
+  delay(5000);
+  IMU.calibrateAccelGyro(&calib);
+  Serial.println("Calibration done!");
+  Serial.println("Accel biases X/Y/Z: ");
+  Serial.print(calib.accelBias[0]);
+  Serial.print(", ");
+  Serial.print(calib.accelBias[1]);
+  Serial.print(", ");
+  Serial.println(calib.accelBias[2]);
+  Serial.println("Gyro biases X/Y/Z: ");
+  Serial.print(calib.gyroBias[0]);
+  Serial.print(", ");
+  Serial.print(calib.gyroBias[1]);
+  Serial.print(", ");
+  Serial.println(calib.gyroBias[2]);
+  delay(1000);
+  IMU.init(calib, IMU_ADDRESS);
+
+  if (err != 0) {
+    Serial.print("Error Setting range: ");
+    Serial.println(err);
+    while (true) {
+      ;
+    }
+  }
 
   // Initialize landmarks array
   for (int i = 0; i < MAX_LANDMARKS; i++) {
@@ -118,7 +160,11 @@ void setup() {
     landmarks[i][1] = 0;
   }
 
-  // mpu.setAccelRange(MPU9250::ACCEL_RANGE_8G);
+  for (int i = 0; i < 3; i++) {
+    dists[i] = -1;
+  }
+
+  // mpu.setAccelRange(MPU6500::ACCEL_RANGE_8G);
 }
 
 int counter = 0;
@@ -178,7 +224,6 @@ void loop() {
   // Print current state
   if (counter==0) printState();
 
-  delay(10); // 10ms delay
   uint64_t elapsedTime = esp_timer_get_time() - startTime;
   
   if (counter==0) {
@@ -188,8 +233,8 @@ void loop() {
   prev_time = current_time;
 }
 
-#define ACCEL_THRESHOLD 0.005
-#define GYRO_THRESHOLD 0.005
+#define ACCEL_THRESHOLD 0.2
+#define GYRO_THRESHOLD 0.01
 #define ZUPT_DURATION 0.5 // s
 
 unsigned long lastUpdateTime = 0;
@@ -199,7 +244,7 @@ unsigned long stationaryStartTime = 0;
 void updateRobotPosition(float accel_x, float accel_y, float delta_yaw, float delta_t) {
   // Simple dead reckoning (this can be improved with more sophisticated methods)
   
-  float accelMagnitude = sqrt(sq(AX) + sq(AY) + sq(AZ-1)); // / 16384.0; // Convert to g
+  float accelMagnitude = sqrt(sq(AX) + sq(AY)); // / 16384.0; // Convert to g
   float gyroMagnitude = sqrt(sq(GX) + sq(GY) + sq(GZ)); // / 131.0; // Convert to deg/s
 
   // Update position (double integration of acceleration)
@@ -210,6 +255,8 @@ void updateRobotPosition(float accel_x, float accel_y, float delta_yaw, float de
       stationaryStartTime = prev_time;
     }
     
+    if (counter==0) Serial.println("ZUPT suspected");
+    
     if (prev_time - stationaryStartTime >= ZUPT_DURATION) {
       // Apply ZUPT correction
       robot_vx = 0; robot_vy = 0;
@@ -218,7 +265,7 @@ void updateRobotPosition(float accel_x, float accel_y, float delta_yaw, float de
   } else {
     isStationary = false;
     
-    if (accelMagnitude < ACCEL_THRESHOLD){
+    if (accelMagnitude >= ACCEL_THRESHOLD){
       // Update velocity and position
       robot_vx += accel_x * delta_t;
       robot_vy += accel_y * delta_t;
@@ -295,61 +342,20 @@ void printState() {
   Serial.println("(0,0)]");
 }
 
-void setupWire() {
-  Wire.begin();
-  Serial.begin(115200);
-  
-  // Wake up MPU9250
-  Wire.beginTransmission(MPU9250_ADDRESS);
-  Wire.write(0x6B);  // PWR_MGMT_1 register
-  Wire.write(0x00);  // set to zero (wakes up the MPU-9250)
-  Wire.endTransmission(true);
-
-  // Configure accelerometer range (±2g)
-  Wire.beginTransmission(MPU9250_ADDRESS);
-  Wire.write(0x1C);  // ACCEL_CONFIG register
-  Wire.write(0x00);  // set to ±2g range
-  Wire.endTransmission(true);
-
-  // Configure gyroscope range (±250 deg/s)
-  Wire.beginTransmission(MPU9250_ADDRESS);
-  Wire.write(0x1B);  // GYRO_CONFIG register
-  Wire.write(0x00);  // set to ±250 deg/s range
-  Wire.endTransmission(true);
-}
-
 void imnotevenfuckingpaidforthis() {
-  // Read accelerometer data
-  Wire.beginTransmission(MPU9250_ADDRESS);
-  Wire.write(ACCEL_XOUT_H);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU9250_ADDRESS, 6, true);
+  Read accelerometer data
+  IMU.update();
+  IMU.getAccel(&accelData);
+  IMU.getGyro(&gyroData);
   
-  int16_t accelX = Wire.read() << 8 | Wire.read();
-  int16_t accelY = Wire.read() << 8 | Wire.read();
-  int16_t accelZ = Wire.read() << 8 | Wire.read();
-  
-  // Convert raw values to g force (±2g range)
-  float ax = accelX / 16384.0;
-  float ay = accelY / 16384.0;
-  float az = accelZ / 16384.0;
-  AX = ax; AY = ay; AZ = az;
+  AX = accelData.accelX * 9.8; 
+  AY = accelData.accelY * 9.8; 
+  AZ = accelData.accelZ * 9.8;
 
   // Read gyroscope data
-  Wire.beginTransmission(MPU9250_ADDRESS);
-  Wire.write(GYRO_XOUT_H);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU9250_ADDRESS, 6, true);
-  
-  int16_t gyroX = Wire.read() << 8 | Wire.read();
-  int16_t gyroY = Wire.read() << 8 | Wire.read();
-  int16_t gyroZ = Wire.read() << 8 | Wire.read();
-  
-  // Convert raw values to degrees per second (±250 deg/s range)
-  float gx = gyroX / 131.0 * PI / 180;
-  float gy = gyroY / 131.0 * PI / 180;
-  float gz = gyroZ / 131.0 * PI / 180;
-  GX = gx; GY = gy; GZ = gz;
+  GX = gyroData.gyroX * PI/180; 
+  GY = gyroData.gyroY * PI/180; 
+  GZ = gyroData.gyroZ * PI/180; 
 
   if(counter!=0) return;
 
@@ -364,12 +370,22 @@ void imnotevenfuckingpaidforthis() {
   Serial.print(robot_vy); Serial.print(" | ");
 
   Serial.print("Accel (g): ");
-  Serial.print(ax); Serial.print(", ");
-  Serial.print(ay); Serial.print(", ");
-  Serial.print(az); Serial.print(" | ");
+  Serial.print(AX); Serial.print(", ");
+  Serial.print(AY); Serial.print(", ");
+  Serial.print(AZ); Serial.print(" | ");
   
   Serial.print("Gyro (rad/s): ");
-  Serial.print(gx); Serial.print(", ");
-  Serial.print(gy); Serial.print(", ");
-  Serial.println(gz);
+  Serial.print(GX); Serial.print(", ");
+  Serial.print(GY); Serial.print(", ");
+  Serial.println(GZ);
+}
+
+
+void getDists(){
+  for(int j = 0; j < 3; j++){
+    d = 
+    for (int i = 0; i < num_landmarks; i++){
+
+    }
+  }
 }
