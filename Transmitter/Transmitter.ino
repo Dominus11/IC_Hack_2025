@@ -113,42 +113,32 @@ void setupWifi(){
 }
 
 float mapVibration(float distance){
-  if (distance < 5 || distance > 400) return 0;
-  return 1/map(distance, 5, 400, 1, 1000);
+  if (distance > 400 || distance <= 1) return 0;
+  return 1/map(distance, 0, 400, 1, 10);
 }
 
 #define CYCLE 100
 
-bool direction = false;
+bool directions[3];
+long lastResetTimes[3];
+
 void updateVibration(unsigned long now){
 
-  if (now - lastResetTime > CYCLE){
-    digitalWrite(MOTOR_1_PIN_1, LOW);
-    digitalWrite(MOTOR_1_PIN_2, LOW);
-
-    digitalWrite(MOTOR_2_PIN_1, LOW);
-    digitalWrite(MOTOR_2_PIN_2, LOW);
-
-    digitalWrite(MOTOR_3_PIN_1, LOW);
-    digitalWrite(MOTOR_3_PIN_2, LOW);
-
-    lastResetTime = now;
+  if (now - lastResetTimes[0] > CYCLE * mapVibration(dists[0])) {
+    digitalWrite(MOTOR_1_PIN_2, directions[0] ? HIGH : LOW);
+    digitalWrite(MOTOR_1_PIN_1, directions[0] ? LOW : HIGH);
+    directions[0] = !directions[0];
   }
-
-  if (now - lastResetTime > CYCLE * mapVibration(dists[0])) {
-    digitalWrite(MOTOR_1_PIN_2, direction ? HIGH : LOW);
-    digitalWrite(MOTOR_1_PIN_1, direction ? LOW : HIGH);
+  if (now - lastResetTimes[1] > CYCLE * mapVibration(dists[1])) {
+    digitalWrite(MOTOR_2_PIN_2, directions[1] ? HIGH : LOW);
+    digitalWrite(MOTOR_2_PIN_1, directions[1] ? LOW : HIGH);
+    directions[1] = !directions[1];
   }
-  if (now - lastResetTime > CYCLE * mapVibration(dists[1])) {
-    digitalWrite(MOTOR_2_PIN_2, direction ? HIGH : LOW);
-    digitalWrite(MOTOR_2_PIN_1, direction ? LOW : HIGH);
+  if (now - lastResetTimes[2] > CYCLE * mapVibration(dists[2])) {
+    digitalWrite(MOTOR_3_PIN_2, directions[2] ? HIGH : LOW);
+    digitalWrite(MOTOR_3_PIN_1, directions[2] ? LOW : HIGH);
+    directions[2] = !directions[2];
   }
-  if (now - lastResetTime > CYCLE * mapVibration(dists[2])) {
-    digitalWrite(MOTOR_3_PIN_2, direction ? HIGH : LOW);
-    digitalWrite(MOTOR_3_PIN_1, direction ? LOW : HIGH);
-  }
-
-  direction = !direction;
 
 }
 
@@ -243,6 +233,8 @@ void setup() {
 
   for (int i = 0; i < 3; i++) {
     dists[i] = -1;
+    directions[i] = false;
+    lastResetTimes[i] = millis();
   }
 
   // mpu.setAccelRange(MPU6500::ACCEL_RANGE_8G);
@@ -317,7 +309,6 @@ void loop() {
   unsigned long lastSendTime = 0;
   if (millis() - lastSendTime > 5000) {  // Send every 5 seconds
       client.send(buffer);
-      buffer = "";
       lastSendTime = millis();
   }
 
