@@ -112,12 +112,24 @@ void setupWifi(){
     }
 }
 
+// float mapVibration(float distance){
+//   if (distance > 100 || distance <= 1) return 0;
+//   return 
+//   // return 1/pow(map(distance, 100, 0, 1, 10), 2);
+// }
+
 float mapVibration(float distance){
-  if (distance > 400 || distance <= 1) return 0;
-  return 1/map(distance, 0, 400, 1, 10);
+  if (distance < 5) return 0;
+  if (distance < 20) return 1/3;
+  // if (distance < 40) return 1/8;
+  // if (distance < 80) return 1/20;
+  return 0;
+
+  if (distance < 5 || distance > 400) return 0;
+  return 1/map(distance, 5, 400, 1, 1000);
 }
 
-#define CYCLE 100
+#define CYCLE 1000
 
 bool directions[3];
 long lastResetTimes[3];
@@ -128,16 +140,33 @@ void updateVibration(unsigned long now){
     digitalWrite(MOTOR_1_PIN_2, directions[0] ? HIGH : LOW);
     digitalWrite(MOTOR_1_PIN_1, directions[0] ? LOW : HIGH);
     directions[0] = !directions[0];
+    lastResetTimes[0] = now;
   }
+  if (mapVibration(dists[0]) <= 1){
+    digitalWrite(MOTOR_1_PIN_2, LOW);
+    digitalWrite(MOTOR_1_PIN_1, LOW);
+  }
+
   if (now - lastResetTimes[1] > CYCLE * mapVibration(dists[1])) {
     digitalWrite(MOTOR_2_PIN_2, directions[1] ? HIGH : LOW);
     digitalWrite(MOTOR_2_PIN_1, directions[1] ? LOW : HIGH);
     directions[1] = !directions[1];
+    lastResetTimes[1] = now;
   }
+  if (mapVibration(dists[1]) <= 1){
+    digitalWrite(MOTOR_2_PIN_2, LOW);
+    digitalWrite(MOTOR_2_PIN_1, LOW);
+  }
+
   if (now - lastResetTimes[2] > CYCLE * mapVibration(dists[2])) {
     digitalWrite(MOTOR_3_PIN_2, directions[2] ? HIGH : LOW);
     digitalWrite(MOTOR_3_PIN_1, directions[2] ? LOW : HIGH);
     directions[2] = !directions[2];
+    lastResetTimes[2] = now;
+  }
+  if (mapVibration(dists[2]) <= 1){
+    digitalWrite(MOTOR_3_PIN_2, LOW);
+    digitalWrite(MOTOR_3_PIN_1, LOW);
   }
 
 }
@@ -308,8 +337,13 @@ void loop() {
   // Optional: Send a message to the server periodically
   unsigned long lastSendTime = 0;
   if (millis() - lastSendTime > 5000) {  // Send every 5 seconds
-      client.send(buffer);
-      lastSendTime = millis();
+    buffer = String(100*robot_x) + " " + String(100*robot_y) + "; ";
+    for (int i = overflow ? (num_landmarks+1)%MAX_LANDMARKS : 0; i != num_landmarks; i = (i+1)%MAX_LANDMARKS) {
+      buffer += String(landmarks[i][0]) + " " + String(landmarks[i][1]) + "; ";
+    }
+    client.send(buffer);
+    buffer = "";
+    lastSendTime = millis();
   }
 
   uint64_t elapsedTime = esp_timer_get_time() - startTime;
@@ -424,11 +458,9 @@ void printState() {
   Serial.println(overflow ? MAX_LANDMARKS : num_landmarks);
   
   Serial.print("Landmarks: \n[");
-  buffer = String(100*robot_x) + " " + String(100*robot_y) + "; ";
   for (int i = overflow ? (num_landmarks+1)%MAX_LANDMARKS : 0; i != num_landmarks; i = (i+1)%MAX_LANDMARKS) {
     // Serial.print("Landmark ");
     // Serial.print(i);
-    buffer += String(landmarks[i][0]) + " " + String(landmarks[i][1]) + "; ";
     Serial.print("(");
     Serial.print(landmarks[i][0]);
     Serial.print(", ");
@@ -509,6 +541,7 @@ void updateDists(){
   dists[1] = centerDistance;
   dists[2] = rightDistance;
 }
+
 
 
 
