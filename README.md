@@ -12,4 +12,8 @@ SeeTrue is an AI-powered hardware tool, which visually impaired users can attach
 
 ## Demo
 
+https://github.com/user-attachments/assets/c1797844-fdbd-47da-a41b-f5b804eae608
+
+
+
 ![SeeTrue Device](assets/device.jpeg)
